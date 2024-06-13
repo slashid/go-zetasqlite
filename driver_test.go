@@ -10,24 +10,196 @@ import (
 	zetasqlite "github.com/goccy/go-zetasqlite"
 )
 
+func TestDriverAlter(t *testing.T) {
+	db, err := sql.Open("zetasqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS Artists (
+			SingerId   INT64 NOT NULL,
+			FirstName  STRING(1024),
+			LastName   STRING(1024),
+			SingerInfo BYTES(MAX)
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT Artists (SingerId, FirstName, LastName) VALUES (1, 'John', 'Titor')`); err != nil {
+		t.Fatal(err)
+	}
+	row := db.QueryRow(`SELECT SingerId, FirstName, LastName FROM Artists WHERE SingerId = @id`, 1)
+	if row.Err() != nil {
+		t.Fatal(row.Err())
+	}
+	var (
+		singerID  int64
+		firstName string
+		lastName  string
+	)
+	if err := row.Scan(&singerID, &firstName, &lastName); err != nil {
+		t.Fatal(err)
+	}
+	if singerID != 1 || firstName != "John" || lastName != "Titor" {
+		t.Fatalf("failed to find row %v %v %v", singerID, firstName, lastName)
+	}
+
+	if _, err := db.Exec(`
+		CREATE VIEW IF NOT EXISTS
+			SingerNames AS SELECT FirstName || ' ' || LastName AS Name
+			FROM Artists
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	viewRow := db.QueryRow(`SELECT Name FROM SingerNames LIMIT 1`)
+	if viewRow.Err() != nil {
+		t.Fatal(viewRow.Err())
+	}
+
+	var name string
+
+	if err := viewRow.Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "John Titor" {
+		t.Fatalf("failed to find view row")
+	}
+
+	// Test ALTER TABLE SET OPTIONS
+	if _, err := db.Exec(`ALTER TABLE Artists SET OPTIONS (description="Famous Artists")`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test ALTER TABLE ADD COLUMN
+	if _, err := db.Exec(`ALTER TABLE Artists ADD COLUMN Age INT64, ADD COLUMN IsSingle BOOL`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the changes
+	row = db.QueryRow(`
+		SELECT SingerId, FirstName, LastName, Age, IsSingle
+		FROM Artists
+		WHERE SingerId = @id`,
+		1,
+	)
+	if row.Err() != nil {
+		t.Fatal(row.Err())
+	}
+
+	var age sql.NullInt64
+	var isSingle sql.NullBool
+	if err := row.Scan(&singerID, &firstName, &lastName, &age, &isSingle); err != nil {
+		t.Fatal(err)
+	}
+	if singerID != 1 || firstName != "John" || lastName != "Titor" || age.Valid || isSingle.Valid {
+		t.Fatalf("failed to find row after ALTER TABLE statements")
+	}
+
+	if _, err := db.Exec(`
+		INSERT Artists (SingerId, FirstName, LastName, Age, IsSingle)
+		VALUES (2, 'Mike', 'Bit', 11, TRUE)
+    `); err != nil {
+		t.Fatal(err)
+	}
+	row = db.QueryRow(`
+		SELECT SingerId, FirstName, LastName, Age, isSingle
+		FROM Artists
+		WHERE SingerId = @id AND isSingle IS NOT NULL`,
+		2,
+	)
+	if row.Err() != nil {
+		t.Fatal(row.Err())
+	}
+	if err := row.Scan(&singerID, &firstName, &lastName, &age, &isSingle); err != nil {
+		t.Fatal(err)
+	}
+	if singerID != 2 || firstName != "Mike" || lastName != "Bit" || age.Int64 != 11 || isSingle.Bool != true {
+		t.Fatalf("Failed to find row %v %v %v %v %v", singerID, firstName, lastName, age, isSingle)
+	}
+
+	if _, err := db.Exec(`
+    	ALTER TABLE Artists
+    	    ADD COLUMN Nationality STRING
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Exec(`
+    	ALTER TABLE Artists
+    	    ALTER COLUMN Nationality SET DEFAULT 'Unknown'
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the changes
+	row = db.QueryRow(`
+		SELECT SingerID, FirstName, LastName, Age, IsSingle, Nationality
+		FROM Artists
+		WHERE SingerId = @id`,
+		2,
+	)
+	if row.Err() != nil {
+		t.Fatal(row.Err())
+	}
+
+	var nationality sql.NullString
+	if err := row.Scan(&singerID, &firstName, &lastName, &age, &isSingle, &nationality); err != nil {
+		t.Fatal(err)
+	}
+
+	if singerID != 2 || firstName != "Mike" || lastName != "Bit" || age.Int64 != 11 || isSingle.Bool != true || nationality.Valid {
+		t.Fatalf("failed to find row after multi-action ALTER TABLE statement")
+	}
+
+	if _, err := db.Exec(`
+		INSERT Artists (SingerId, FirstName, LastName, Age, IsSingle)
+		   VALUES (3, 'Mark', 'Byte', 12, FALSE)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the changes
+	row = db.QueryRow(`
+		SELECT SingerID, FirstName, LastName, Age, IsSingle, Nationality
+		FROM Artists
+		WHERE SingerId = @id`,
+		3,
+	)
+	if row.Err() != nil {
+		t.Fatal(row.Err())
+	}
+
+	if err := row.Scan(&singerID, &firstName, &lastName, &age, &isSingle, &nationality); err != nil {
+		t.Fatal(err)
+	}
+	if singerID != 3 || firstName != "Mark" || lastName != "Byte" || age.Int64 != 12 || isSingle.Bool != false || nationality.String != "Unknown" {
+		t.Fatalf("failed to find row after multi-action ALTER TABLE statement")
+	}
+}
+
 func TestDriver(t *testing.T) {
 	db, err := sql.Open("zetasqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`
-CREATE TABLE IF NOT EXISTS Singers (
-  SingerId   INT64 NOT NULL,
-  FirstName  STRING(1024),
-  LastName   STRING(1024),
-  SingerInfo BYTES(MAX)
-)`); err != nil {
+		CREATE TABLE IF NOT EXISTS Singers (
+		    SingerId   INT64 NOT NULL,
+  			FirstName  STRING(1024),
+  			LastName   STRING(1024),
+  			SingerInfo BYTES(MAX)
+		)
+	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT Singers (SingerId, FirstName, LastName) VALUES (1, 'John', 'Titor')`); err != nil {
+	if _, err := db.Exec(`
+		INSERT Singers (SingerId, FirstName, LastName)
+			VALUES (1, 'John', 'Titor')
+    `); err != nil {
 		t.Fatal(err)
 	}
-	row := db.QueryRow("SELECT SingerID, FirstName, LastName FROM Singers WHERE SingerId = @id", 1)
+	row := db.QueryRow(`SELECT SingerID, FirstName, LastName FROM Singers WHERE SingerId = @id`, 1)
 	if row.Err() != nil {
 		t.Fatal(row.Err())
 	}
@@ -43,7 +215,10 @@ CREATE TABLE IF NOT EXISTS Singers (
 		t.Fatalf("failed to find row %v %v %v", singerID, firstName, lastName)
 	}
 	if _, err := db.Exec(`
-CREATE VIEW IF NOT EXISTS SingerNames AS SELECT FirstName || ' ' || LastName AS Name FROM Singers`); err != nil {
+		CREATE VIEW IF NOT EXISTS
+		    SingerNames AS SELECT FirstName || ' ' || LastName AS Name 
+       		FROM Singers
+   `); err != nil {
 		t.Fatal(err)
 	}
 

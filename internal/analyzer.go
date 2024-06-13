@@ -75,6 +75,7 @@ func newAnalyzerOptions() (*zetasql.AnalyzerOptions, error) {
 		zetasql.FeatureV11WithOnSubquery,
 		zetasql.FeatureV13Pivot,
 		zetasql.FeatureV13Unpivot,
+		zetasql.FeatureV13ColumnDefaultValue,
 	})
 	langOpt.SetSupportedStatementKinds([]ast.Kind{
 		ast.BeginStmt,
@@ -87,6 +88,7 @@ func newAnalyzerOptions() (*zetasql.AnalyzerOptions, error) {
 		ast.DropStmt,
 		ast.TruncateStmt,
 		ast.CreateTableStmt,
+		ast.AlterTableStmt,
 		ast.CreateTableAsSelectStmt,
 		ast.CreateProcedureStmt,
 		ast.CreateFunctionStmt,
@@ -290,8 +292,30 @@ func (a *Analyzer) newStmtAction(ctx context.Context, query string, args []drive
 		return a.newBeginStmtAction(ctx, query, args, node)
 	case ast.CommitStmt:
 		return a.newCommitStmtAction(ctx, query, args, node)
+	case ast.AlterTableStmt:
+		return a.alterTableStmtAction(ctx, query, args, node.(*ast.AlterTableStmtNode))
 	}
 	return nil, fmt.Errorf("unsupported stmt %s", node.DebugString())
+}
+
+func (a *Analyzer) alterTableStmtAction(ctx context.Context, query string, args []driver.NamedValue, node *ast.AlterTableStmtNode) (*AlterTableStmtAction, error) {
+	spec, err := newAlterSpec(ctx, a.namePath, node)
+	if err != nil {
+		return nil, err
+	}
+	params := getParamsFromNode(node)
+	queryArgs, err := getArgsFromParams(args, params)
+	if err != nil {
+		return nil, err
+	}
+	return &AlterTableStmtAction{
+		query:   query,
+		spec:    spec,
+		node:    node,
+		args:    queryArgs,
+		rawArgs: args,
+		catalog: a.catalog,
+	}, nil
 }
 
 func (a *Analyzer) newCreateTableStmtAction(_ context.Context, query string, args []driver.NamedValue, node *ast.CreateTableStmtNode) (*CreateTableStmtAction, error) {

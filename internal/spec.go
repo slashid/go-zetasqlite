@@ -114,6 +114,18 @@ type TableSpec struct {
 	CreatedAt  time.Time      `json:"createdAt"`
 }
 
+type ColumnWithDefaultSpec struct {
+	ColumnName   string
+	DefaultValue string
+}
+
+type AlterTableSpec struct {
+	NamePath                   []string                 `json:"namePath"`
+	AddedColumns               []*ColumnSpec            `json:"addedColumns"`
+	ColumnsWithNewDefaultValue []*ColumnWithDefaultSpec `json:"columnsWithNewDefaultValue"`
+	UpdatedAt                  time.Time                `json:"updatedAt"`
+}
+
 func (s *TableSpec) Column(name string) *ColumnSpec {
 	for _, col := range s.Columns {
 		if col.Name == name {
@@ -121,6 +133,10 @@ func (s *TableSpec) Column(name string) *ColumnSpec {
 		}
 	}
 	return nil
+}
+
+func (s *AlterTableSpec) TableName() string {
+	return formatPath(s.NamePath)
 }
 
 func (s *TableSpec) TableName() string {
@@ -511,6 +527,54 @@ func newPrimaryKey(key *ast.PrimaryKeyNode) []string {
 		return nil
 	}
 	return key.ColumnNameList()
+}
+
+func newAlterSpec(ctx context.Context, namePath *NamePath, stmt *ast.AlterTableStmtNode) (*AlterTableSpec, error) {
+	list := stmt.AlterActionList()
+	var columns []*ast.ColumnDefinitionNode
+	var columnsAddDefault []*ColumnWithDefaultSpec
+
+	var err error
+
+	for i := range list {
+		action := list[i]
+		if err != nil {
+			return nil, err
+		}
+		switch action.Kind() {
+		case ast.AddColumnAction | ast.AlterColumnSetDefaultAction:
+			err = fmt.Errorf("adding field with default value to an existing table schema is not supported")
+		case ast.AddColumnAction:
+			addColumnAction := action.(*ast.AddColumnActionNode)
+			columns = append(columns, addColumnAction.ColumnDefinition())
+		case ast.AlterColumnSetDefaultAction:
+			setDefaultAction := action.(*ast.AlterColumnSetDefaultActionNode)
+			columnName := setDefaultAction.Column()
+			defaultValueExpr := setDefaultAction.DefaultValue().Expression()
+			var defaultValue string
+			if defaultValueExpr != nil {
+				// TODO: figure out the timestamp thing here?
+				defaultValue, err = newNode(defaultValueExpr).FormatSQL(ctx) // assuming newNode has a method to format SQL
+				if err != nil {
+					return nil, fmt.Errorf("failed to format default value: %w", err)
+				}
+			}
+			columnsAddDefault = append(columnsAddDefault, &ColumnWithDefaultSpec{
+				ColumnName:   columnName,
+				DefaultValue: defaultValue,
+			})
+		default:
+			err = fmt.Errorf("unknown alter action kind: %v", action.Kind())
+		}
+	}
+
+	now := time.Now()
+	return &AlterTableSpec{
+		NamePath:                   namePath.mergePath(stmt.NamePath()),
+		AddedColumns:               newColumnsFromDef(columns),
+		ColumnsWithNewDefaultValue: columnsAddDefault,
+		UpdatedAt:                  now,
+	}, nil
 }
 
 func newTableSpec(namePath *NamePath, stmt *ast.CreateTableStmtNode) *TableSpec {

@@ -17,6 +17,81 @@ type StmtAction interface {
 	Args() []interface{}
 }
 
+type AlterTableStmtAction struct {
+	query   string
+	node    *ast.AlterTableStmtNode
+	spec    *AlterTableSpec
+	args    []interface{}
+	rawArgs []driver.NamedValue
+	catalog *Catalog
+}
+
+func (a *AlterTableStmtAction) Prepare(ctx context.Context, conn *Conn) (driver.Stmt, error) {
+	stmt, err := conn.PrepareContext(ctx, a.query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare %s: %w", a.query, err)
+	}
+	return newDMLStmt(stmt, []*ast.ParameterNode{}, ""), nil
+}
+
+func (a *AlterTableStmtAction) exec(ctx context.Context, conn *Conn) error {
+	var statementsToExecute []string
+
+	for _, column := range a.spec.AddedColumns {
+		statementsToExecute = append(
+			statementsToExecute,
+			fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s;", formatPath(a.spec.NamePath), column.Name, column.SQLiteSchema()),
+		)
+	}
+
+	for _, column := range a.spec.ColumnsWithNewDefaultValue {
+		foundColumn := a.catalog.tableMap[a.spec.TableName()].Column(column.ColumnName)
+		renameOldColumn := fmt.Sprintf("ALTER TABLE `%s` RENAME COLUMN `%s` TO `%s_old`;", formatPath(a.spec.NamePath), column.ColumnName, column.ColumnName)
+		addNewColumn := fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s DEFAULT %s;", formatPath(a.spec.NamePath), column.ColumnName, foundColumn.SQLiteSchema(), column.DefaultValue)
+		copyData := fmt.Sprintf("UPDATE `%s` SET `%s` = `%s_old`;", formatPath(a.spec.NamePath), column.ColumnName, column.ColumnName)
+		dropOldColumn := fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s_old`;", formatPath(a.spec.NamePath), column.ColumnName)
+
+		statementsToExecute = append(statementsToExecute, renameOldColumn, addNewColumn, copyData, dropOldColumn)
+	}
+
+	fullQuery := strings.Join(statementsToExecute, "\n")
+
+	// TODO: improve
+	fullQuery = strings.ReplaceAll(fullQuery, "zetasqlite_current_timestamp()", "CURRENT_TIMESTAMP")
+
+	if _, err := conn.ExecContext(ctx, fullQuery); err != nil {
+		return fmt.Errorf("failed to exec %s: %w", a.query, err)
+	}
+
+	if err := a.catalog.modifyTableSpec(a.spec); err != nil {
+		return fmt.Errorf("failed to add new table spec: %w", err)
+	}
+
+	return nil
+}
+
+func (a *AlterTableStmtAction) ExecContext(ctx context.Context, conn *Conn) (driver.Result, error) {
+	if err := a.exec(ctx, conn); err != nil {
+		return nil, err
+	}
+	return &Result{conn: conn}, nil
+}
+
+func (a *AlterTableStmtAction) QueryContext(ctx context.Context, conn *Conn) (*Rows, error) {
+	if err := a.exec(ctx, conn); err != nil {
+		return nil, err
+	}
+	return &Rows{conn: conn}, nil
+}
+
+func (a *AlterTableStmtAction) Args() []interface{} {
+	return a.args
+}
+
+func (a *AlterTableStmtAction) Cleanup(ctx context.Context, conn *Conn) error {
+	return nil
+}
+
 type CreateTableStmtAction struct {
 	query           string
 	args            []interface{}
