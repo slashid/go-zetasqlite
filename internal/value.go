@@ -289,7 +289,7 @@ func (sv StringValue) ToStruct() (*StructValue, error) {
 }
 
 func (sv StringValue) ToJSON() (string, error) {
-	return strconv.Quote(string(sv)), nil
+	return string(sv), nil
 }
 
 func (sv StringValue) ToTime() (time.Time, error) {
@@ -431,7 +431,7 @@ func (bv BytesValue) ToJSON() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strconv.Quote(v), nil
+	return v, nil
 }
 
 func (bv BytesValue) ToTime() (time.Time, error) {
