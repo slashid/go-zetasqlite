@@ -438,6 +438,42 @@ func (c *Catalog) addTableSpec(spec *TableSpec) error {
 	return nil
 }
 
+func (c *Catalog) modifyTableSpec(spec *AlterTableSpec) error {
+	tableName := spec.TableName()
+	foundSpecToUpdate, exists := c.tableMap[tableName]
+
+	if !exists {
+		return fmt.Errorf("table %s does not exist", tableName)
+	}
+
+	formattedPath := formatPath(spec.NamePath)
+
+	err := c.deleteTableSpecByName(formattedPath)
+	if err != nil {
+		return err
+	}
+
+	for _, column := range spec.ColumnsWithNewDefaultValue {
+		if foundSpecToUpdate.Column(column.ColumnName) == nil {
+			return fmt.Errorf("cannot update column %s to have a default value, table %s does not have this column", tableName, column.ColumnName)
+		}
+	}
+
+	addedColumns := make([]*ColumnSpec, len(foundSpecToUpdate.Columns))
+	copy(addedColumns, foundSpecToUpdate.Columns)
+	addedColumns = append(addedColumns, spec.AddedColumns...)
+
+	foundSpecToUpdate.Columns = addedColumns
+	foundSpecToUpdate.UpdatedAt = spec.UpdatedAt
+
+	err = c.addTableSpec(foundSpecToUpdate)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *Catalog) addTableSpecRecursive(cat *types.SimpleCatalog, spec *TableSpec) error {
 	if len(spec.NamePath) > 1 {
 		subCatalogName := spec.NamePath[0]
