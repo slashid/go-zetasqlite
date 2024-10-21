@@ -2424,7 +2424,7 @@ func TimestampFromFloatValue(f float64) (time.Time, error) {
 func TimestampFromInt64Value(v int64) (time.Time, error) {
 	sec := v / int64(time.Millisecond)
 	msec := v - sec*int64(time.Millisecond)
-	return time.Unix(sec, msec*int64(time.Millisecond)).UTC(), nil
+	return time.Unix(sec, msec*1000).UTC(), nil
 }
 
 func parseInterval(v string) (*IntervalValue, error) {
